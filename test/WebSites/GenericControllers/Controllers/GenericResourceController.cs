@@ -21,7 +21,7 @@ namespace GenericControllers.Controllers
         /// Retrieves all resources
         /// </summary>
         [HttpGet]
-        public IEnumerable<TResource> Get()
+        public IEnumerable<TResource> Get(string keywords)
         {
             return new[] { new TResource(), new TResource() };
         }

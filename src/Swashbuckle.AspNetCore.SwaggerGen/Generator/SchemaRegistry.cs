@@ -7,6 +7,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 using Newtonsoft.Json.Converters;
 using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi.Any;
 
 namespace Swashbuckle.AspNetCore.SwaggerGen
 {
@@ -32,254 +33,256 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
 
         public OpenApiSchema GetOrRegister(Type type)
         {
-            throw new NotImplementedException();
+            var referencedTypes = new Queue<Type>();
+            var OpenApiSchema = CreateSchema(type, referencedTypes);
+
+            // Ensure all referenced types have a corresponding definition
+            while (referencedTypes.Any())
+            {
+                var referencedType = referencedTypes.Dequeue();
+                var OpenApiSchemaId = _schemaIdManager.IdFor(referencedType);
+                if (Definitions.ContainsKey(OpenApiSchemaId)) continue;
+
+                // NOTE: Add the OpenApiSchemaId first with a null value. This indicates a work-in-progress
+                // and prevents a stack overflow by ensuring the above condition is met if the same
+                // type ends up back on the referencedTypes queue via recursion within 'CreateInlineOpenApiSchema'
+                Definitions.Add(OpenApiSchemaId, null);
+                Definitions[OpenApiSchemaId] = CreateInlineSchema(referencedType, referencedTypes);
+            }
+
+            return OpenApiSchema;
         }
 
-        //public Schema GetOrRegister(Type type)
-        //{
-        //    var referencedTypes = new Queue<Type>();
-        //    var schema = CreateSchema(type, referencedTypes);
+        private OpenApiSchema CreateSchema(Type type, Queue<Type> referencedTypes)
+        {
+            // If Option<T> (F#), use the type argument
+            if (type.IsFSharpOption())
+                type = type.GetGenericArguments()[0];
 
-        //    // Ensure all referenced types have a corresponding definition
-        //    while (referencedTypes.Any())
-        //    {
-        //        var referencedType = referencedTypes.Dequeue();
-        //        var schemaId = _schemaIdManager.IdFor(referencedType);
-        //        if (Definitions.ContainsKey(schemaId)) continue;
+            var jsonContract = _jsonContractResolver.ResolveContract(type);
 
-        //        // NOTE: Add the schemaId first with a null value. This indicates a work-in-progress
-        //        // and prevents a stack overflow by ensuring the above condition is met if the same
-        //        // type ends up back on the referencedTypes queue via recursion within 'CreateInlineSchema'
-        //        Definitions.Add(schemaId, null);
-        //        Definitions[schemaId] = CreateInlineSchema(referencedType, referencedTypes);
-        //    }
+            var createReference = !_options.CustomTypeMappings.ContainsKey(type)
+                && type != typeof(object)
+                && (// Type describes an object
+                    jsonContract is JsonObjectContract ||
+                    // Type is self-referencing
+                    jsonContract.IsSelfReferencingArrayOrDictionary() ||
+                    // Type is enum and opt-in flag set
+                    (type.GetTypeInfo().IsEnum && _options.UseReferencedDefinitionsForEnums));
 
-        //    return schema;
-        //}
+            return createReference
+                ? CreateReferenceSchema(type, referencedTypes)
+                : CreateInlineSchema(type, referencedTypes);
+        }
 
-        //private Schema CreateSchema(Type type, Queue<Type> referencedTypes)
-        //{
-        //    // If Option<T> (F#), use the type argument
-        //    if (type.IsFSharpOption())
-        //        type = type.GetGenericArguments()[0];
+        private OpenApiSchema CreateReferenceSchema(Type type, Queue<Type> referencedTypes)
+        {
+            referencedTypes.Enqueue(type);
+            return new OpenApiSchema
+            {
+                Reference = new OpenApiReference { Type = ReferenceType.Schema, Id = _schemaIdManager.IdFor(type) }
+            };
+        }
 
-        //    var jsonContract = _jsonContractResolver.ResolveContract(type);
+        private OpenApiSchema CreateInlineSchema(Type type, Queue<Type> referencedTypes)
+        {
+            OpenApiSchema OpenApiSchema;
 
-        //    var createReference = !_options.CustomTypeMappings.ContainsKey(type)
-        //        && type != typeof(object)
-        //        && (// Type describes an object
-        //            jsonContract is JsonObjectContract ||
-        //            // Type is self-referencing
-        //            jsonContract.IsSelfReferencingArrayOrDictionary() ||
-        //            // Type is enum and opt-in flag set
-        //            (type.GetTypeInfo().IsEnum && _options.UseReferencedDefinitionsForEnums));
+            var jsonContract = _jsonContractResolver.ResolveContract(type);
 
-        //    return createReference
-        //        ? CreateReferenceSchema(type, referencedTypes)
-        //        : CreateInlineSchema(type, referencedTypes);
-        //}
+            if (_options.CustomTypeMappings.ContainsKey(type))
+            {
+                OpenApiSchema = _options.CustomTypeMappings[type]();
+            }
+            else
+            {
+                // TODO: Perhaps a "Chain of Responsibility" would clean this up a little?
+                if (jsonContract is JsonPrimitiveContract)
+                    OpenApiSchema = CreatePrimitiveSchema((JsonPrimitiveContract)jsonContract);
+                else if (jsonContract is JsonDictionaryContract)
+                    OpenApiSchema = CreateDictionarySchema((JsonDictionaryContract)jsonContract, referencedTypes);
+                else if (jsonContract is JsonArrayContract)
+                    OpenApiSchema = CreateArraySchema((JsonArrayContract)jsonContract, referencedTypes);
+                else if (jsonContract is JsonObjectContract && type != typeof(object))
+                    OpenApiSchema = CreateObjectSchema((JsonObjectContract)jsonContract, referencedTypes);
+                else
+                    // None of the above, fallback to abstract "object"
+                    OpenApiSchema = new OpenApiSchema { Type = "object" };
+            }
 
-        //private Schema CreateReferenceSchema(Type type, Queue<Type> referencedTypes)
-        //{
-        //    referencedTypes.Enqueue(type);
-        //    return new Schema { Ref = "#/definitions/" + _schemaIdManager.IdFor(type) };
-        //}
+            var filterContext = new SchemaFilterContext(type, jsonContract, this);
+            foreach (var filter in _options.SchemaFilters)
+            {
+                filter.Apply(OpenApiSchema, filterContext);
+            }
 
-        //private Schema CreateInlineSchema(Type type, Queue<Type> referencedTypes)
-        //{
-        //    Schema schema;
+            return OpenApiSchema;
+        }
 
-        //    var jsonContract = _jsonContractResolver.ResolveContract(type);
+        private OpenApiSchema CreatePrimitiveSchema(JsonPrimitiveContract primitiveContract)
+        {
+            // If Nullable<T>, use the type argument
+            var type = primitiveContract.UnderlyingType.IsNullable()
+                ? Nullable.GetUnderlyingType(primitiveContract.UnderlyingType)
+                : primitiveContract.UnderlyingType;
 
-        //    if (_options.CustomTypeMappings.ContainsKey(type))
-        //    {
-        //        schema = _options.CustomTypeMappings[type]();
-        //    }
-        //    else
-        //    {
-        //        // TODO: Perhaps a "Chain of Responsibility" would clean this up a little?
-        //        if (jsonContract is JsonPrimitiveContract)
-        //            schema = CreatePrimitiveSchema((JsonPrimitiveContract)jsonContract);
-        //        else if (jsonContract is JsonDictionaryContract)
-        //            schema = CreateDictionarySchema((JsonDictionaryContract)jsonContract, referencedTypes);
-        //        else if (jsonContract is JsonArrayContract)
-        //            schema = CreateArraySchema((JsonArrayContract)jsonContract, referencedTypes);
-        //        else if (jsonContract is JsonObjectContract && type != typeof(object))
-        //            schema = CreateObjectSchema((JsonObjectContract)jsonContract, referencedTypes);
-        //        else
-        //            // None of the above, fallback to abstract "object"
-        //            schema = new Schema { Type = "object" };
-        //    }
+            if (type.GetTypeInfo().IsEnum)
+                return CreateEnumSchema(primitiveContract, type);
 
-        //    var filterContext = new SchemaFilterContext(type, jsonContract, this);
-        //    foreach (var filter in _options.SchemaFilters)
-        //    {
-        //        filter.Apply(schema, filterContext);
-        //    }
+            if (PrimitiveTypeMap.ContainsKey(type))
+                return PrimitiveTypeMap[type]();
 
-        //    return schema;
-        //}
+            // None of the above, fallback to string
+            return new OpenApiSchema { Type = "string" };
+        }
 
-        //private Schema CreatePrimitiveSchema(JsonPrimitiveContract primitiveContract)
-        //{
-        //    // If Nullable<T>, use the type argument
-        //    var type = primitiveContract.UnderlyingType.IsNullable()
-        //        ? Nullable.GetUnderlyingType(primitiveContract.UnderlyingType)
-        //        : primitiveContract.UnderlyingType;
+        private OpenApiSchema CreateEnumSchema(JsonPrimitiveContract primitiveContract, Type type)
+        {
+            var stringEnumConverter = primitiveContract.Converter as StringEnumConverter
+                ?? _jsonSerializerSettings.Converters.OfType<StringEnumConverter>().FirstOrDefault();
 
-        //    if (type.GetTypeInfo().IsEnum)
-        //        return CreateEnumSchema(primitiveContract, type);
+            if (_options.DescribeAllEnumsAsStrings || stringEnumConverter != null)
+            {
+                var camelCase = _options.DescribeStringEnumsInCamelCase
+                    || (stringEnumConverter != null && stringEnumConverter.CamelCaseText);
 
-        //    if (PrimitiveTypeMap.ContainsKey(type))
-        //        return PrimitiveTypeMap[type]();
+                var enumNames = type.GetFields(BindingFlags.Public | BindingFlags.Static)
+                    .Select(f =>
+                    {
+                        var name = f.Name;
 
-        //    // None of the above, fallback to string
-        //    return new Schema { Type = "string" };
-        //}
+                        var enumMemberAttribute = f.GetCustomAttributes().OfType<EnumMemberAttribute>().FirstOrDefault();
+                        if (enumMemberAttribute != null && enumMemberAttribute.Value != null)
+                        {
+                            name = enumMemberAttribute.Value;
+                        }
 
-        //private Schema CreateEnumSchema(JsonPrimitiveContract primitiveContract, Type type)
-        //{
-        //    var stringEnumConverter = primitiveContract.Converter as StringEnumConverter
-        //        ?? _jsonSerializerSettings.Converters.OfType<StringEnumConverter>().FirstOrDefault();
+                        return camelCase ? name.ToCamelCase() : name;
+                    });
 
-        //    if (_options.DescribeAllEnumsAsStrings || stringEnumConverter != null)
-        //    {
-        //        var camelCase = _options.DescribeStringEnumsInCamelCase
-        //            || (stringEnumConverter != null && stringEnumConverter.CamelCaseText);
+                return new OpenApiSchema
+                {
+                    Type = "string",
+                    Enum = enumNames
+                        .Select(name => new OpenApiString(name))
+                        .ToList<IOpenApiAny>()
+                };
+            }
 
-        //        var enumNames = type.GetFields(BindingFlags.Public | BindingFlags.Static)
-        //            .Select(f =>
-        //            {
-        //                var name = f.Name;
+            return new OpenApiSchema
+            {
+                Type = "integer",
+                Format = "int32",
+                Enum = Enum.GetValues(type).Cast<int>()
+                    .Select(value => new OpenApiInteger(value))
+                    .ToList<IOpenApiAny>()
+            };
+        }
 
-        //                var enumMemberAttribute = f.GetCustomAttributes().OfType<EnumMemberAttribute>().FirstOrDefault();
-        //                if (enumMemberAttribute != null && enumMemberAttribute.Value != null)
-        //                {
-        //                    name = enumMemberAttribute.Value;
-        //                }
+        private OpenApiSchema CreateDictionarySchema(JsonDictionaryContract dictionaryContract, Queue<Type> referencedTypes)
+        {
+            var keyType = dictionaryContract.DictionaryKeyType ?? typeof(object);
+            var valueType = dictionaryContract.DictionaryValueType ?? typeof(object);
 
-        //                return camelCase ? name.ToCamelCase() : name;
-        //            });
+            if (keyType.GetTypeInfo().IsEnum)
+            {
+                return new OpenApiSchema
+                {
+                    Type = "object",
+                    Properties = Enum.GetNames(keyType).ToDictionary(
+                        (name) => dictionaryContract.DictionaryKeyResolver(name),
+                        (name) => CreateSchema(valueType, referencedTypes)
+                    )
+                };
+            }
+            else
+            {
+                return new OpenApiSchema
+                {
+                    Type = "object",
+                    AdditionalProperties = CreateSchema(valueType, referencedTypes)
+                };
+            }
+        }
 
-        //        return new Schema
-        //        {
-        //            Type = "string",
-        //            Enum = enumNames.ToArray()
-        //        };
-        //    }
+        private OpenApiSchema CreateArraySchema(JsonArrayContract arrayContract, Queue<Type> referencedTypes)
+        {
+            var type = arrayContract.UnderlyingType;
+            var itemType = arrayContract.CollectionItemType ?? typeof(object);
 
-        //    return new Schema
-        //    {
-        //        Type = "integer",
-        //        Format = "int32",
-        //        Enum = Enum.GetValues(type).Cast<object>().ToArray()
-        //    };
-        //}
+            var isASet = (type.GetTypeInfo().IsGenericType && type.GetGenericTypeDefinition() == typeof(ISet<>)
+                || type.GetInterfaces().Any(i => i.GetTypeInfo().IsGenericType && i.GetGenericTypeDefinition() == typeof(ISet<>)));
 
-        //private Schema CreateDictionarySchema(JsonDictionaryContract dictionaryContract, Queue<Type> referencedTypes)
-        //{
-        //    var keyType = dictionaryContract.DictionaryKeyType ?? typeof(object);
-        //    var valueType = dictionaryContract.DictionaryValueType ?? typeof(object);
+            return new OpenApiSchema
+            {
+                Type = "array",
+                Items = CreateSchema(itemType, referencedTypes),
+                UniqueItems = isASet
+            };
+        }
 
-        //    if (keyType.GetTypeInfo().IsEnum)
-        //    {
-        //        return new Schema
-        //        {
-        //            Type = "object",
-        //            Properties = Enum.GetNames(keyType).ToDictionary(
-        //                (name) => dictionaryContract.DictionaryKeyResolver(name),
-        //                (name) => CreateSchema(valueType, referencedTypes)
-        //            )
-        //        };
-        //    }
-        //    else
-        //    {
-        //        return new Schema
-        //        {
-        //            Type = "object",
-        //            AdditionalProperties = CreateSchema(valueType, referencedTypes)
-        //        };
-        //    }
-        //}
+        private OpenApiSchema CreateObjectSchema(JsonObjectContract jsonContract, Queue<Type> referencedTypes)
+        {
+            var applicableJsonProperties = jsonContract.Properties
+                .Where(prop => !prop.Ignored)
+                .Where(prop => !(_options.IgnoreObsoleteProperties && prop.IsObsolete()))
+                .Select(prop => prop);
 
-        //private Schema CreateArraySchema(JsonArrayContract arrayContract, Queue<Type> referencedTypes)
-        //{
-        //    var type = arrayContract.UnderlyingType;
-        //    var itemType = arrayContract.CollectionItemType ?? typeof(object);
+            var required = applicableJsonProperties
+                .Where(prop => prop.IsRequired())
+                .Select(propInfo => propInfo.PropertyName)
+                .ToList();
 
-        //    var isASet = (type.GetTypeInfo().IsGenericType && type.GetGenericTypeDefinition() == typeof(ISet<>)
-        //        || type.GetInterfaces().Any(i => i.GetTypeInfo().IsGenericType && i.GetGenericTypeDefinition() == typeof(ISet<>)));
+            var hasExtensionData = jsonContract.ExtensionDataValueType != null;
 
-        //    return new Schema
-        //    {
-        //        Type = "array",
-        //        Items = CreateSchema(itemType, referencedTypes),
-        //        UniqueItems = isASet
-        //    };
-        //}
+            var properties = applicableJsonProperties
+                .ToDictionary(
+                    prop => prop.PropertyName,
+                    prop => CreatePropertyOpenApiSchema(prop, referencedTypes));
 
-        //private Schema CreateObjectSchema(JsonObjectContract jsonContract, Queue<Type> referencedTypes)
-        //{
-        //    var applicableJsonProperties = jsonContract.Properties
-        //        .Where(prop => !prop.Ignored)
-        //        .Where(prop => !(_options.IgnoreObsoleteProperties && prop.IsObsolete()))
-        //        .Select(prop => prop);
+            var OpenApiSchema = new OpenApiSchema
+            {
+                Required = new SortedSet<string>(required),
+                Properties = properties,
+                AdditionalProperties = hasExtensionData ? new OpenApiSchema { Type = "object" } : null,
+                Type = "object",
+            };
 
-        //    var required = applicableJsonProperties
-        //        .Where(prop => prop.IsRequired())
-        //        .Select(propInfo => propInfo.PropertyName)
-        //        .ToList();
+            return OpenApiSchema;
+        }
 
-        //    var hasExtensionData = jsonContract.ExtensionDataValueType != null;
+        private OpenApiSchema CreatePropertyOpenApiSchema(JsonProperty jsonProperty, Queue<Type> referencedTypes)
+        {
+            var OpenApiSchema = CreateSchema(jsonProperty.PropertyType, referencedTypes);
 
-        //    var properties = applicableJsonProperties
-        //        .ToDictionary(
-        //            prop => prop.PropertyName,
-        //            prop => CreatePropertySchema(prop, referencedTypes));
+            if (!jsonProperty.Writable)
+                OpenApiSchema.ReadOnly = true;
 
-        //    var schema = new Schema
-        //    {
-        //        Required = required.Any() ? required : null, // required can be null but not empty
-        //        Properties = properties,
-        //        AdditionalProperties = hasExtensionData ? new Schema { Type = "object" } : null,
-        //        Type = "object",
-        //    };
+            if (jsonProperty.TryGetMemberInfo(out MemberInfo memberInfo))
+                OpenApiSchema.AssignAttributeMetadata(memberInfo.GetCustomAttributes(true));
 
-        //    return schema;
-        //}
+            return OpenApiSchema;
+        }
 
-        //private Schema CreatePropertySchema(JsonProperty jsonProperty, Queue<Type> referencedTypes)
-        //{
-        //    var schema = CreateSchema(jsonProperty.PropertyType, referencedTypes);
-
-        //    if (!jsonProperty.Writable)
-        //        schema.ReadOnly = true;
-
-        //    if (jsonProperty.TryGetMemberInfo(out MemberInfo memberInfo))
-        //        schema.AssignAttributeMetadata(memberInfo.GetCustomAttributes(true));
-
-        //    return schema;
-        //}
-
-        //private static readonly Dictionary<Type, Func<Schema>> PrimitiveTypeMap = new Dictionary<Type, Func<Schema>>
-        //{
-        //    { typeof(short), () => new Schema { Type = "integer", Format = "int32" } },
-        //    { typeof(ushort), () => new Schema { Type = "integer", Format = "int32" } },
-        //    { typeof(int), () => new Schema { Type = "integer", Format = "int32" } },
-        //    { typeof(uint), () => new Schema { Type = "integer", Format = "int32" } },
-        //    { typeof(long), () => new Schema { Type = "integer", Format = "int64" } },
-        //    { typeof(ulong), () => new Schema { Type = "integer", Format = "int64" } },
-        //    { typeof(float), () => new Schema { Type = "number", Format = "float" } },
-        //    { typeof(double), () => new Schema { Type = "number", Format = "double" } },
-        //    { typeof(decimal), () => new Schema { Type = "number", Format = "double" } },
-        //    { typeof(byte), () => new Schema { Type = "integer", Format = "int32" } },
-        //    { typeof(sbyte), () => new Schema { Type = "integer", Format = "int32" } },
-        //    { typeof(byte[]), () => new Schema { Type = "string", Format = "byte" } },
-        //    { typeof(sbyte[]), () => new Schema { Type = "string", Format = "byte" } },
-        //    { typeof(bool), () => new Schema { Type = "boolean" } },
-        //    { typeof(DateTime), () => new Schema { Type = "string", Format = "date-time" } },
-        //    { typeof(DateTimeOffset), () => new Schema { Type = "string", Format = "date-time" } },
-        //    { typeof(Guid), () => new Schema { Type = "string", Format = "uuid" } }
-        //};
+        private static readonly Dictionary<Type, Func<OpenApiSchema>> PrimitiveTypeMap = new Dictionary<Type, Func<OpenApiSchema>>
+        {
+            { typeof(short), () => new OpenApiSchema { Type = "integer", Format = "int32" } },
+            { typeof(ushort), () => new OpenApiSchema { Type = "integer", Format = "int32" } },
+            { typeof(int), () => new OpenApiSchema { Type = "integer", Format = "int32" } },
+            { typeof(uint), () => new OpenApiSchema { Type = "integer", Format = "int32" } },
+            { typeof(long), () => new OpenApiSchema { Type = "integer", Format = "int64" } },
+            { typeof(ulong), () => new OpenApiSchema { Type = "integer", Format = "int64" } },
+            { typeof(float), () => new OpenApiSchema { Type = "number", Format = "float" } },
+            { typeof(double), () => new OpenApiSchema { Type = "number", Format = "double" } },
+            { typeof(decimal), () => new OpenApiSchema { Type = "number", Format = "double" } },
+            { typeof(byte), () => new OpenApiSchema { Type = "integer", Format = "int32" } },
+            { typeof(sbyte), () => new OpenApiSchema { Type = "integer", Format = "int32" } },
+            { typeof(byte[]), () => new OpenApiSchema { Type = "string", Format = "byte" } },
+            { typeof(sbyte[]), () => new OpenApiSchema { Type = "string", Format = "byte" } },
+            { typeof(bool), () => new OpenApiSchema { Type = "boolean" } },
+            { typeof(DateTime), () => new OpenApiSchema { Type = "string", Format = "date-time" } },
+            { typeof(DateTimeOffset), () => new OpenApiSchema { Type = "string", Format = "date-time" } },
+            { typeof(Guid), () => new OpenApiSchema { Type = "string", Format = "uuid" } }
+        };
     }
 }

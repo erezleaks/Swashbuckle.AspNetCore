@@ -11,7 +11,7 @@ namespace Swashbuckle.AspNetCore.Swagger
             string basePath = null);
     }
 
-    public class UnknownSwaggerDocument : Exception
+    public class UnknownSwaggerDocument : InvalidOperationException
     {
         public UnknownSwaggerDocument(string documentName)
             : base(string.Format("Unknown Swagger document - {0}", documentName))

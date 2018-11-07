@@ -1,16 +1,14 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Reflection;
 using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc.ApiExplorer;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.Extensions.Options;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Http;
 using Swashbuckle.AspNetCore.Swagger;
 using Microsoft.OpenApi.Models;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Swashbuckle.AspNetCore.SwaggerGen
 {
@@ -135,14 +133,136 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
 
         private OpenApiOperation CreateOperation(ApiDescription apiDescription, ISchemaRegistry schemaRegistry)
         {
-            return new OpenApiOperation();
+            apiDescription.GetAdditionalMetadata(out MethodInfo methodInfo, out IEnumerable<object> methodAttributes);
+
+            var operation = new OpenApiOperation
+            {
+                Tags = CreateTags(apiDescription),
+                OperationId = _options.OperationIdSelector(apiDescription),
+                Parameters = CreateParameters(apiDescription, schemaRegistry),
+                RequestBody = CreateRequestBodyOrNull(apiDescription, methodAttributes, schemaRegistry),
+                Deprecated = methodAttributes.OfType<ObsoleteAttribute>().Any()
+            };
+
+            var filterContext = new OperationFilterContext(
+                apiDescription,
+                schemaRegistry,
+                methodInfo);
+
+            foreach (var filter in _options.OperationFilters)
+            {
+                filter.Apply(operation, filterContext);
+            }
+
+            return operation;
+        }
+
+        private IList<OpenApiTag> CreateTags(ApiDescription apiDescription)
+        {
+            return _options.TagsSelector(apiDescription)
+                .Select(tagName => new OpenApiTag { Name = tagName })
+                .ToList();
+        }
+
+        private IList<OpenApiParameter> CreateParameters(ApiDescription apiDescription, ISchemaRegistry schemaRegistry)
+        {
+            var applicableApiParameterDescriptions = apiDescription.ParameterDescriptions
+                .Where(apiParam =>
+                {
+                    return ParameterLocationMap.Keys.Contains(apiParam.Source)
+                        && (apiParam.ModelMetadata == null || apiParam.ModelMetadata.IsBindingAllowed);
+                });
+
+            return applicableApiParameterDescriptions
+                .Select(apiParam => CreateParameter(apiDescription, apiParam, schemaRegistry))
+                .ToList();
+        }
+
+        private OpenApiParameter CreateParameter(
+            ApiDescription apiDescription,
+            ApiParameterDescription apiParameterDescription,
+            ISchemaRegistry schemaRegistry)
+        {
+            apiParameterDescription.GetAdditionalMetadata(
+                apiDescription,
+                out ParameterInfo parameterInfo,
+                out PropertyInfo propertyInfo,
+                out IEnumerable<object> parameterOrPropertyAttributes);
+
+            var name = _options.DescribeAllParametersInCamelCase
+                ? apiParameterDescription.Name.ToCamelCase()
+                : apiParameterDescription.Name;
+
+            var isRequired = (apiParameterDescription.Source == BindingSource.Path)
+                || parameterOrPropertyAttributes.Any(attr => new[] { typeof(RequiredAttribute), typeof(BindRequiredAttribute) }.Contains(attr.GetType()));
+
+            var schema = (apiParameterDescription.Type != null)
+                ? schemaRegistry.GetOrRegister(apiParameterDescription.Type)
+                : new OpenApiSchema { Type = "string" };
+
+            var parameter = new OpenApiParameter
+            {
+                Name = name,
+                In = ParameterLocationMap[apiParameterDescription.Source],
+                Required = isRequired,
+                Schema = schema
+            };
+
+            var filterContext = new ParameterFilterContext(
+                apiParameterDescription,
+                schemaRegistry,
+                parameterInfo,
+                propertyInfo);
+
+            foreach (var filter in _options.ParameterFilters)
+            {
+                filter.Apply(parameter, filterContext);
+            }
+
+            return parameter;
+        }
+
+        private OpenApiRequestBody CreateRequestBodyOrNull(
+            ApiDescription apiDescription,
+            IEnumerable<object> methodAttributes,
+            ISchemaRegistry schemaRegistry)
+        {
+            var applicableApiParameterDescriptions = apiDescription.ParameterDescriptions
+                .Where(apiParam =>
+                {
+                    return (new[] { "Body", "Form", "FormFile" }.Contains(apiParam.Source.ToString()))
+                        && (apiParam.ModelMetadata == null || apiParam.ModelMetadata.IsBindingAllowed);
+                });
+
+            if (!applicableApiParameterDescriptions.Any()) return null;
+
+            return new OpenApiRequestBody();
+        }
+
+        private IEnumerable<string> InferRequestMediaTypes(ApiDescription apiDescription, IEnumerable<object> methodAttributes)
+        {
+            // If there's media types explicitly specified via ConsumesAttribute, use them
+            var explicitMediaTypes = methodAttributes.OfType<ConsumesAttribute>()
+                .SelectMany(attr => attr.ContentTypes)
+                .Distinct();
+            if (explicitMediaTypes.Any()) return explicitMediaTypes;
+
+            // If there's media types surfaced by ApiExplorer, use them
+            var apiExplorerMediaTypes = apiDescription.SupportedRequestFormats
+                .Select(format => format.MediaType);
+            if (apiExplorerMediaTypes.Any()) return apiExplorerMediaTypes;
+
+            // As a last resort, try to infer from parameter bindings
+            return apiDescription.ParameterDescriptions.Any(apiParam => new[] { BindingSource.Form, BindingSource.FormFile }.Contains(apiParam.Source))
+                ? new[] { "multipart/form-data" }
+                : Enumerable.Empty<string>();
         }
 
         //public SwaggerDocument GetSwagger(
         //    string documentName,
         //    string host = null,
         //    string basePath = null,
-        //    string[] schemes = null)
+        //    string[] schemes  null)
         //{
         //    if (!_options.SwaggerDocs.TryGetValue(documentName, out Info info))
         //        throw new UnknownSwaggerDocument(documentName);
@@ -187,65 +307,6 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
         //        .OrderBy(_options.SortKeySelector)
         //        .GroupBy(apiDesc => apiDesc.RelativePathSansQueryString())
         //        .ToDictionary(group => "/" + group.Key, group => CreatePathItem(group, schemaRegistry));
-        //}
-
-        //private PathItem CreatePathItem(
-        //    IEnumerable<ApiDescription> apiDescriptions,
-        //    ISchemaRegistry schemaRegistry)
-        //{
-        //    var pathItem = new PathItem();
-
-        //    // Group further by http method
-        //    var perMethodGrouping = apiDescriptions
-        //        .GroupBy(apiDesc => apiDesc.HttpMethod);
-
-        //    foreach (var group in perMethodGrouping)
-        //    {
-        //        var httpMethod = group.Key;
-
-        //        if (httpMethod == null)
-        //            throw new NotSupportedException(string.Format(
-        //                "Ambiguous HTTP method for action - {0}. " +
-        //                "Actions require an explicit HttpMethod binding for Swagger 2.0",
-        //                group.First().ActionDescriptor.DisplayName));
-
-        //        if (group.Count() > 1 && _options.ConflictingActionsResolver == null)
-        //            throw new NotSupportedException(string.Format(
-        //                "HTTP method \"{0}\" & path \"{1}\" overloaded by actions - {2}. " +
-        //                "Actions require unique method/path combination for Swagger 2.0. Use ConflictingActionsResolver as a workaround",
-        //                httpMethod,
-        //                group.First().RelativePathSansQueryString(),
-        //                string.Join(",", group.Select(apiDesc => apiDesc.ActionDescriptor.DisplayName))));
-
-        //        var apiDescription = (group.Count() > 1) ? _options.ConflictingActionsResolver(group) : group.Single();
-
-        //        switch (httpMethod.ToUpper())
-        //        {
-        //            case "GET":
-        //                pathItem.Get = CreateOperation(apiDescription, schemaRegistry);
-        //                break;
-        //            case "PUT":
-        //                pathItem.Put = CreateOperation(apiDescription, schemaRegistry);
-        //                break;
-        //            case "POST":
-        //                pathItem.Post = CreateOperation(apiDescription, schemaRegistry);
-        //                break;
-        //            case "DELETE":
-        //                pathItem.Delete = CreateOperation(apiDescription, schemaRegistry);
-        //                break;
-        //            case "OPTIONS":
-        //                pathItem.Options = CreateOperation(apiDescription, schemaRegistry);
-        //                break;
-        //            case "HEAD":
-        //                pathItem.Head = CreateOperation(apiDescription, schemaRegistry);
-        //                break;
-        //            case "PATCH":
-        //                pathItem.Patch = CreateOperation(apiDescription, schemaRegistry);
-        //                break;
-        //        }
-        //    }
-
-        //    return pathItem;
         //}
 
         //private Operation CreateOperation(
@@ -482,15 +543,13 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
         //    };
         //}
 
-        //private static Dictionary<BindingSource, string> ParameterLocationMap = new Dictionary<BindingSource, string>
-        //{
-        //    { BindingSource.Form, "formData" },
-        //    { BindingSource.FormFile, "formData" },
-        //    { BindingSource.Body, "body" },
-        //    { BindingSource.Header, "header" },
-        //    { BindingSource.Path, "path" },
-        //    { BindingSource.Query, "query" }
-        //};
+        private static Dictionary<BindingSource, ParameterLocation> ParameterLocationMap = new Dictionary<BindingSource, ParameterLocation>
+        {
+            { BindingSource.Query, ParameterLocation.Query },
+            { BindingSource.ModelBinding, ParameterLocation.Query },
+            { BindingSource.Header, ParameterLocation.Header },
+            { BindingSource.Path, ParameterLocation.Path }
+        };
 
         //private static readonly Dictionary<string, string> ResponseDescriptionMap = new Dictionary<string, string>
         //{

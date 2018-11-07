@@ -5,10 +5,8 @@ using Microsoft.Extensions.Options;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Routing.Template;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
-using Newtonsoft.Json;
-using Microsoft.OpenApi.Writers;
 using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi.Writers;
 
 namespace Swashbuckle.AspNetCore.Swagger
 {
@@ -44,7 +42,7 @@ namespace Swashbuckle.AspNetCore.Swagger
             var basePath = string.IsNullOrEmpty(httpContext.Request.PathBase)
                 ? null
                 : httpContext.Request.PathBase.ToString();
-                
+
             try
             {
                 var swagger = swaggerProvider.GetSwagger(documentName, null, basePath);
@@ -68,7 +66,7 @@ namespace Swashbuckle.AspNetCore.Swagger
             documentName = null;
             if (request.Method != "GET") return false;
 
-			var routeValues = new RouteValueDictionary();
+            var routeValues = new RouteValueDictionary();
             if (!_requestMatcher.TryMatch(request.Path, routeValues) || !routeValues.ContainsKey("documentName")) return false;
 
             documentName = routeValues["documentName"].ToString();

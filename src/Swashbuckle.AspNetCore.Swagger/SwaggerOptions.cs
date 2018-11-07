@@ -10,6 +10,7 @@ namespace Swashbuckle.AspNetCore.Swagger
         public SwaggerOptions()
         {
             PreSerializeFilters = new List<Action<OpenApiDocument, HttpRequest>>();
+            SerializeAsV2 = false;
         }
 
         /// <summary>
@@ -17,6 +18,7 @@ namespace Swashbuckle.AspNetCore.Swagger
         /// </summary>
         public string RouteTemplate { get; set; } = "swagger/{documentName}/swagger.json";
 
+        
         /// <summary>
         /// Return Swagger JSON in the V2 format rather than V3
         /// </summary>

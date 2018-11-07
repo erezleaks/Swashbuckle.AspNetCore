@@ -1,15 +1,32 @@
-﻿using System.Linq;
+﻿using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using Microsoft.AspNetCore.Mvc.ApiExplorer;
 using Microsoft.AspNetCore.Mvc.Controllers;
-using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace Swashbuckle.AspNetCore.SwaggerGen
 {
     public static class ApiParameterDescriptionExtensions
     {
-        internal static bool TryGetParameterInfo(
-            this ApiParameterDescription apiParameterDescription,
+        internal static void GetAdditionalMetadata(
+            this ApiParameterDescription apiParameterDesc,
+            ApiDescription apiDescription,
+            out ParameterInfo parameterInfo,
+            out PropertyInfo propertyInfo,
+            out IEnumerable<object> parameterOrPropertyAttributes)
+        {
+            parameterInfo = null;
+            propertyInfo = null;
+            parameterOrPropertyAttributes = Enumerable.Empty<object>();
+
+            if (apiParameterDesc.TryGetParameterInfo(apiDescription, out parameterInfo))
+                parameterOrPropertyAttributes = parameterInfo.GetCustomAttributes(true);
+            else if (apiParameterDesc.TryGetPropertyInfo(out propertyInfo))
+                parameterOrPropertyAttributes = propertyInfo.GetCustomAttributes(true);
+        }
+
+        private static bool TryGetParameterInfo(
+            this ApiParameterDescription apiParameterDesc,
             ApiDescription apiDescription,
             out ParameterInfo parameterInfo)
         {
@@ -17,8 +34,8 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
                 .OfType<ControllerParameterDescriptor>()
                 .FirstOrDefault(descriptor =>
                 {
-                    return (apiParameterDescription.Name == descriptor.BindingInfo?.BinderModelName)
-                        || (apiParameterDescription.Name == descriptor.Name);
+                    return (apiParameterDesc.Name == descriptor.BindingInfo?.BinderModelName)
+                        || (apiParameterDesc.Name == descriptor.Name);
                 });
 
             parameterInfo = controllerParameterDescriptor?.ParameterInfo;
@@ -26,11 +43,11 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
             return (parameterInfo != null);
         }
 
-        internal static bool TryGetPropertyInfo(
-            this ApiParameterDescription apiParameterDescription,
+        private static bool TryGetPropertyInfo(
+            this ApiParameterDescription apiParameterDesc,
             out PropertyInfo propertyInfo)
         {
-            var modelMetadata = apiParameterDescription.ModelMetadata;
+            var modelMetadata = apiParameterDesc.ModelMetadata;
 
             propertyInfo = (modelMetadata?.ContainerType != null)
                 ? modelMetadata.ContainerType.GetProperty(modelMetadata.PropertyName)
