@@ -1,5 +1,6 @@
 ﻿using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
 namespace GenericControllers.Controllers
@@ -12,7 +13,7 @@ namespace GenericControllers.Controllers
         /// <param name="resource"></param>
         /// <returns></returns>
         [HttpPost]
-        public int Create([FromBody, Required]TResource resource)
+        public int Create([FromForm, Required]TResource resource)
         {
             return 1;
         }
@@ -36,12 +37,18 @@ namespace GenericControllers.Controllers
         }
 
         [HttpPut("{id}")]
+        [Consumes("application/json")]
         public void Update(int id, [FromBody, Required]TResource resource)
         {
         }
 
         [HttpDelete("{id}")]
         public void Delete(int id)
+        {
+        }
+
+        [HttpPost("{id}/files")]
+        public void UploadFile(int id, IFormFile file)
         {
         }
     }

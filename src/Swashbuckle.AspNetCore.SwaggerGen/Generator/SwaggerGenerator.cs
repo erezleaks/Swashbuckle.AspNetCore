@@ -50,8 +50,13 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
             var swaggerDoc = new OpenApiDocument
             {
                 Info = info,
-                Servers = CreateServerList(host, basePath),
-                Paths = CreatePaths(applicableApiDescriptions, schemaRegistry)
+                Servers = CreateServers(host, basePath),
+                Paths = CreatePaths(applicableApiDescriptions, schemaRegistry),
+                Components = new OpenApiComponents
+                {
+                    Schemas = schemaRegistry.Schemas,
+                    SecuritySchemes = _options.SecuritySchemes
+                }
             };
 
             var filterContext = new DocumentFilterContext(
@@ -67,7 +72,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
             return swaggerDoc;
         }
 
-        private IList<OpenApiServer> CreateServerList(string host, string basePath)
+        private IList<OpenApiServer> CreateServers(string host, string basePath)
         {
             return (host == null && basePath == null)
                 ? new List<OpenApiServer>()
@@ -140,7 +145,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
                 Tags = CreateTags(apiDescription),
                 OperationId = _options.OperationIdSelector(apiDescription),
                 Parameters = CreateParameters(apiDescription, schemaRegistry),
-                RequestBody = CreateRequestBodyOrNull(apiDescription, methodAttributes, schemaRegistry),
+                RequestBody = CreateRequestBody(apiDescription, methodAttributes, schemaRegistry),
                 Deprecated = methodAttributes.OfType<ObsoleteAttribute>().Any()
             };
 
@@ -194,7 +199,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
                 : apiParameterDescription.Name;
 
             var isRequired = (apiParameterDescription.Source == BindingSource.Path)
-                || parameterOrPropertyAttributes.Any(attr => new[] { typeof(RequiredAttribute), typeof(BindRequiredAttribute) }.Contains(attr.GetType()));
+                || parameterOrPropertyAttributes.Any(attr => RequiredAttributeTypes.Contains(attr.GetType()));
 
             var schema = (apiParameterDescription.Type != null)
                 ? schemaRegistry.GetOrRegister(apiParameterDescription.Type)
@@ -222,40 +227,100 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
             return parameter;
         }
 
-        private OpenApiRequestBody CreateRequestBodyOrNull(
+        private OpenApiRequestBody CreateRequestBody(
             ApiDescription apiDescription,
             IEnumerable<object> methodAttributes,
             ISchemaRegistry schemaRegistry)
         {
-            var applicableApiParameterDescriptions = apiDescription.ParameterDescriptions
-                .Where(apiParam =>
-                {
-                    return (new[] { "Body", "Form", "FormFile" }.Contains(apiParam.Source.ToString()))
-                        && (apiParam.ModelMetadata == null || apiParam.ModelMetadata.IsBindingAllowed);
-                });
+            var supportedContentTypes = InferSupportedContentTypes(apiDescription, methodAttributes);
+            if (!supportedContentTypes.Any()) return null;
 
-            if (!applicableApiParameterDescriptions.Any()) return null;
-
-            return new OpenApiRequestBody();
+            return new OpenApiRequestBody
+            {
+                Content = supportedContentTypes
+                    .ToDictionary(
+                        contentType => contentType,
+                        contentType => CreateRequestMediaType(contentType, apiDescription, schemaRegistry)
+                    )
+            };
         }
 
-        private IEnumerable<string> InferRequestMediaTypes(ApiDescription apiDescription, IEnumerable<object> methodAttributes)
+        private IEnumerable<string> InferSupportedContentTypes(ApiDescription apiDescription, IEnumerable<object> methodAttributes)
         {
-            // If there's media types explicitly specified via ConsumesAttribute, use them
-            var explicitMediaTypes = methodAttributes.OfType<ConsumesAttribute>()
+            // If there's content types explicitly specified via ConsumesAttribute, use them
+            var explicitContentTypes = methodAttributes.OfType<ConsumesAttribute>()
                 .SelectMany(attr => attr.ContentTypes)
                 .Distinct();
-            if (explicitMediaTypes.Any()) return explicitMediaTypes;
+            if (explicitContentTypes.Any()) return explicitContentTypes;
 
-            // If there's media types surfaced by ApiExplorer, use them
-            var apiExplorerMediaTypes = apiDescription.SupportedRequestFormats
+            // If there's content types surfaced by ApiExplorer, use them
+            var apiExplorerContentTypes = apiDescription.SupportedRequestFormats
                 .Select(format => format.MediaType);
-            if (apiExplorerMediaTypes.Any()) return apiExplorerMediaTypes;
+            if (apiExplorerContentTypes.Any()) return apiExplorerContentTypes;
 
             // As a last resort, try to infer from parameter bindings
-            return apiDescription.ParameterDescriptions.Any(apiParam => new[] { BindingSource.Form, BindingSource.FormFile }.Contains(apiParam.Source))
+            return apiDescription.ParameterDescriptions.Any(apiParam => FormBindingSources.Contains(apiParam.Source))
                 ? new[] { "multipart/form-data" }
                 : Enumerable.Empty<string>();
+        }
+
+        private OpenApiMediaType CreateRequestMediaType(string contentType, ApiDescription apiDescription, ISchemaRegistry schemaRegistry)
+        {
+            var bodyParameter = apiDescription.ParameterDescriptions
+                .FirstOrDefault(apiParam => apiParam.Source == BindingSource.Body);
+
+            var formParameters = apiDescription.ParameterDescriptions
+                .Where(apiParam => FormBindingSources.Contains(apiParam.Source));
+
+            if (bodyParameter == null && !formParameters.Any())
+                throw new InvalidOperationException("TODO:");
+
+            return new OpenApiMediaType
+            {
+                Schema = (bodyParameter != null)
+                    ? schemaRegistry.GetOrRegister(bodyParameter.Type)
+                    : CreateFormSchema(apiDescription, formParameters, schemaRegistry)
+            };
+        }
+
+        private OpenApiSchema CreateFormSchema(
+            ApiDescription apiDescription,
+            IEnumerable<ApiParameterDescription> formParameters,
+            ISchemaRegistry schemaRegistry)
+        {
+            // First, map to a simple data structure that captures the pertinent values
+            var parametersMetadata = formParameters
+                .Select(apiParam =>
+                {
+                    apiParam.GetAdditionalMetadata(
+                        apiDescription,
+                        out ParameterInfo parameterInfo,
+                        out PropertyInfo propertyInfo,
+                        out IEnumerable<object> parameterOrPropertyAttributes);
+
+                    var name = _options.DescribeAllParametersInCamelCase ? apiParam.Name.ToCamelCase() : apiParam.Name;
+
+                    var isRequired = parameterOrPropertyAttributes.Any(attr => RequiredAttributeTypes.Contains(attr.GetType()));
+
+                    var schema = schemaRegistry.GetOrRegister(apiParam.Type);
+
+                    return new
+                    {
+                        Name = name,
+                        IsRequired = isRequired,
+                        Schema = schema
+                    };
+                });
+
+            return new OpenApiSchema
+            {
+                Type = "object",
+                Properties = parametersMetadata.ToDictionary(
+                    metadata => metadata.Name,
+                    metadata => metadata.Schema
+                ),
+                Required = new SortedSet<string>(parametersMetadata.Where(m => m.IsRequired).Select(m => m.Name))
+            };
         }
 
         //public SwaggerDocument GetSwagger(
@@ -550,6 +615,10 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
             { BindingSource.Header, ParameterLocation.Header },
             { BindingSource.Path, ParameterLocation.Path }
         };
+
+        private static IEnumerable<BindingSource> FormBindingSources = new[] { BindingSource.Form, BindingSource.FormFile };
+
+        private static IEnumerable<Type> RequiredAttributeTypes = new[] { typeof(BindRequiredAttribute), typeof(RequiredAttribute) };
 
         //private static readonly Dictionary<string, string> ResponseDescriptionMap = new Dictionary<string, string>
         //{

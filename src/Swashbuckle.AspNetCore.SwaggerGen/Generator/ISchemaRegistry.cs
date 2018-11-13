@@ -8,6 +8,6 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
     {
         OpenApiSchema GetOrRegister(Type type);
 
-        IDictionary<string, OpenApiSchema> Definitions { get; }
+        IDictionary<string, OpenApiSchema> Schemas { get; }
     }
 }

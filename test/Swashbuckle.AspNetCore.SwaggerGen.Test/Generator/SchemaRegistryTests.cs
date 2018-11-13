@@ -159,7 +159,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen.Test
 
             subject.GetOrRegister(typeof(ComplexType));
 
-            var schema = subject.Definitions["ComplexType"];
+            var schema = subject.Schemas["ComplexType"];
             Assert.NotNull(schema);
             Assert.Equal("boolean", schema.Properties["Property1"].Type);
             Assert.Null(schema.Properties["Property1"].Format);
@@ -180,7 +180,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen.Test
 
             subject.GetOrRegister(typeof(ExtensionDataObjectType));
 
-            var schema = subject.Definitions["ExtensionDataObjectType"];
+            var schema = subject.Schemas["ExtensionDataObjectType"];
             Assert.NotNull(schema);
             Assert.Equal("boolean", schema.Properties["Property1"].Type);
             Assert.Null(schema.Properties["Property1"].Format);
@@ -196,7 +196,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen.Test
 
             subject.GetOrRegister(typeof(SubType));
 
-            var schema = subject.Definitions["SubType"];
+            var schema = subject.Schemas["SubType"];
             Assert.Equal("string", schema.Properties["BaseProperty"].Type);
             Assert.Null(schema.Properties["BaseProperty"].Format);
             Assert.Equal("integer", schema.Properties["SubTypeProperty"].Type);
@@ -210,7 +210,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen.Test
 
             subject.GetOrRegister(typeof(DynamicObjectSubType));
 
-            var schema = subject.Definitions["DynamicObjectSubType"];
+            var schema = subject.Schemas["DynamicObjectSubType"];
             Assert.Equal(1, schema.Properties.Count);
             Assert.Equal("string", schema.Properties["Property1"].Type);
         }
@@ -222,7 +222,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen.Test
 
             subject.GetOrRegister(typeof(IndexedType));
 
-            var schema = subject.Definitions["IndexedType"];
+            var schema = subject.Schemas["IndexedType"];
             Assert.Equal(1, schema.Properties.Count);
             Assert.Contains("Property1", schema.Properties.Keys);
         }
@@ -234,7 +234,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen.Test
 
             subject.GetOrRegister(typeof(JsonAnnotatedType));
 
-            var schema = subject.Definitions["JsonAnnotatedType"];
+            var schema = subject.Schemas["JsonAnnotatedType"];
             Assert.Equal(2, schema.Properties.Count);
             Assert.Contains("foobar", schema.Properties.Keys);
             Assert.Equal(new[] { "Property3" }, schema.Required.ToArray());
@@ -247,7 +247,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen.Test
 
             subject.GetOrRegister(typeof(DataAnnotatedType));
 
-            var schema = subject.Definitions["DataAnnotatedType"];
+            var schema = subject.Schemas["DataAnnotatedType"];
             Assert.Equal(1, schema.Properties["IntWithRange"].Minimum);
             Assert.Equal(12, schema.Properties["IntWithRange"].Maximum);
             Assert.Equal("^[3-6]?\\d{12,15}$", schema.Properties["StringWithRegularExpression"].Pattern);
@@ -269,7 +269,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen.Test
 
             subject.GetOrRegister(typeof(MetadataAnnotatedType));
 
-            var schema = subject.Definitions["MetadataAnnotatedType"];
+            var schema = subject.Schemas["MetadataAnnotatedType"];
             Assert.Equal(1, schema.Properties["IntWithRange"].Minimum);
             Assert.Equal(12, schema.Properties["IntWithRange"].Maximum);
             Assert.Equal("^[3-6]?\\d{12,15}$", schema.Properties["StringWithRegularExpression"].Pattern);
@@ -342,7 +342,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen.Test
 
             var schema = (schemaOrRef.Ref == null)
                 ? schemaOrRef
-                : subject.Definitions[schemaOrRef.Ref.Replace("#/definitions/", "")];
+                : subject.Schemas[schemaOrRef.Ref.Replace("#/definitions/", "")];
 
             Assert.True(schema.Extensions.ContainsKey("X-property1"));
         }
@@ -354,7 +354,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen.Test
 
             subject.GetOrRegister(typeof(ObsoletePropertiesType));
 
-            var schema = subject.Definitions["ObsoletePropertiesType"];
+            var schema = subject.Schemas["ObsoletePropertiesType"];
             Assert.DoesNotContain("ObsoleteProperty", schema.Properties.Keys);
         }
 
@@ -410,7 +410,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen.Test
             var schema = subject.GetOrRegister(typeof(AnEnum));
 
             Assert.NotNull(schema.Ref);
-            Assert.Contains(schema.Ref.Replace("#/definitions/", string.Empty), subject.Definitions.Keys);
+            Assert.Contains(schema.Ref.Replace("#/definitions/", string.Empty), subject.Schemas.Keys);
         }
 
         [Fact]
@@ -431,13 +431,13 @@ namespace Swashbuckle.AspNetCore.SwaggerGen.Test
 
             subject.GetOrRegister(typeof(CompositeType));
 
-            var rootSchema = subject.Definitions["CompositeType"];
+            var rootSchema = subject.Schemas["CompositeType"];
             Assert.NotNull(rootSchema);
             Assert.Equal("object", rootSchema.Type);
             Assert.Equal("#/definitions/ComplexType", rootSchema.Properties["Property1"].Ref);
             Assert.Equal("array", rootSchema.Properties["Property2"].Type);
             Assert.Equal("#/definitions/ComplexType", rootSchema.Properties["Property2"].Items.Ref);
-            var componentSchema = subject.Definitions["ComplexType"];
+            var componentSchema = subject.Schemas["ComplexType"];
             Assert.NotNull(componentSchema);
             Assert.Equal("object", componentSchema.Type);
             Assert.Equal(5, componentSchema.Properties.Count);
@@ -450,11 +450,11 @@ namespace Swashbuckle.AspNetCore.SwaggerGen.Test
 
             subject.GetOrRegister(typeof(ContainingType));
 
-            var rootSchema = subject.Definitions["ContainingType"];
+            var rootSchema = subject.Schemas["ContainingType"];
             Assert.NotNull(rootSchema);
             Assert.Equal("object", rootSchema.Type);
             Assert.Equal("#/definitions/NestedType", rootSchema.Properties["Property1"].Ref);
-            var nestedSchema = subject.Definitions["NestedType"];
+            var nestedSchema = subject.Schemas["NestedType"];
             Assert.NotNull(nestedSchema);
             Assert.Equal("object", nestedSchema.Type);
             Assert.Equal(1, nestedSchema.Properties.Count);
@@ -472,7 +472,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen.Test
 
             subject.GetOrRegister(systemType);
 
-            Assert.Contains(expectedSchemaId, subject.Definitions.Keys);
+            Assert.Contains(expectedSchemaId, subject.Schemas.Keys);
         }
 
         [Fact]
